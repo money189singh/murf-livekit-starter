@@ -1,9 +1,10 @@
 'use client';
 
-import { useTheme } from 'next-themes';
 import { AnimatePresence, motion } from 'motion/react';
 import { useSessionContext } from '@livekit/components-react';
+
 import type { AppConfig } from '@/app-config';
+
 import { AgentSessionView_01 } from '@/components/agents-ui/blocks/agent-session-view-01';
 import { WelcomeView } from '@/components/app/welcome-view';
 
@@ -32,13 +33,14 @@ interface ViewControllerProps {
   appConfig: AppConfig;
 }
 
-export function ViewController({ appConfig }: ViewControllerProps) {
+export function ViewController({
+  appConfig,
+}: ViewControllerProps) {
   const { isConnected, start } = useSessionContext();
-  const { resolvedTheme } = useTheme();
 
   return (
     <AnimatePresence mode="wait">
-      {/* Welcome view */}
+      {/* Welcome / Ready screen */}
       {!isConnected && (
         <MotionWelcomeView
           key="welcome"
@@ -47,28 +49,37 @@ export function ViewController({ appConfig }: ViewControllerProps) {
           onStartCall={start}
         />
       )}
-      {/* Session view */}
+
+      {/* Connected voice assistant */}
       {isConnected && (
         <MotionSessionView
           key="session-view"
           {...VIEW_MOTION_PROPS}
+
           supportsChatInput={appConfig.supportsChatInput}
-          supportsVideoInput={appConfig.supportsVideoInput}
-          supportsScreenShare={appConfig.supportsScreenShare}
-          isPreConnectBufferEnabled={appConfig.isPreConnectBufferEnabled}
-          audioVisualizerType={appConfig.audioVisualizerType}
-          audioVisualizerColor={
-            resolvedTheme === 'dark'
-              ? appConfig.audioVisualizerColorDark
-              : appConfig.audioVisualizerColor
+
+          // Voice healthcare assistant doesn't need camera
+          supportsVideoInput={false}
+
+          // Voice healthcare assistant doesn't need screen sharing
+          supportsScreenShare={false}
+
+          isPreConnectBufferEnabled={
+            appConfig.isPreConnectBufferEnabled
           }
-          audioVisualizerColorShift={appConfig.audioVisualizerColorShift}
-          audioVisualizerBarCount={appConfig.audioVisualizerBarCount}
-          audioVisualizerGridRowCount={appConfig.audioVisualizerGridRowCount}
-          audioVisualizerGridColumnCount={appConfig.audioVisualizerGridColumnCount}
-          audioVisualizerRadialBarCount={appConfig.audioVisualizerRadialBarCount}
-          audioVisualizerRadialRadius={appConfig.audioVisualizerRadialRadius}
-          audioVisualizerWaveLineWidth={appConfig.audioVisualizerWaveLineWidth}
+
+          // Health Access visual style
+          audioVisualizerType="aura"
+          audioVisualizerColor="#00A878"
+          audioVisualizerColorShift={0.15}
+
+          audioVisualizerBarCount={5}
+          audioVisualizerGridRowCount={15}
+          audioVisualizerGridColumnCount={15}
+          audioVisualizerRadialBarCount={25}
+          audioVisualizerRadialRadius={100}
+          audioVisualizerWaveLineWidth={3}
+
           className="fixed inset-0"
         />
       )}
