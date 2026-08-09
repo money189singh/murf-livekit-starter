@@ -1,22 +1,7 @@
-import { Button } from '@/components/ui/button';
+'use client';
 
-function WelcomeImage() {
-  return (
-    <svg
-      width="64"
-      height="64"
-      viewBox="0 0 64 64"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="text-fg0 mb-4 size-16"
-    >
-      <path
-        d="M15 24V40C15 40.7957 14.6839 41.5587 14.1213 42.1213C13.5587 42.6839 12.7956 43 12 43C11.2044 43 10.4413 42.6839 9.87868 42.1213C9.31607 41.5587 9 40.7957 9 40V24C9 23.2044 9.31607 22.4413 9.87868 21.8787C10.4413 21.3161 11.2044 21 12 21C12.7956 21 13.5587 21.3161 14.1213 21.8787C14.6839 22.4413 15 23.2044 15 24ZM22 5C21.2044 5 20.4413 5.31607 19.8787 5.87868C19.3161 6.44129 19 7.20435 19 8V56C19 56.7957 19.3161 57.5587 19.8787 58.1213C20.4413 58.6839 21.2044 59 22 59C22.7956 59 23.5587 58.6839 24.1213 58.1213C24.6839 57.5587 25 56.7957 25 56V8C25 7.20435 24.6839 6.44129 24.1213 5.87868C23.5587 5.31607 22.7956 5 22 5ZM32 13C31.2044 13 30.4413 13.3161 29.8787 13.8787C29.3161 14.4413 29 15.2044 29 16V48C29 48.7957 29.3161 49.5587 29.8787 50.1213C30.4413 50.6839 31.2044 51 32 51C32.7956 51 33.5587 50.6839 34.1213 50.1213C34.6839 49.5587 35 48.7957 35 48V16C35 15.2044 34.6839 14.4413 34.1213 13.8787C33.5587 13.3161 32.7956 13 32 13ZM42 21C41.2043 21 40.4413 21.3161 39.8787 21.8787C39.3161 22.4413 39 23.2044 39 24V40C39 40.7957 39.3161 41.5587 39.8787 42.1213C40.4413 42.6839 41.2043 43 42 43C42.7957 43 43.5587 42.6839 44.1213 42.1213C44.6839 41.5587 45 40.7957 45 40V24C45 23.2044 44.6839 22.4413 44.1213 21.8787C43.5587 21.3161 42.7957 21 42 21ZM52 17C51.2043 17 50.4413 17.3161 49.8787 17.8787C49.3161 18.4413 49 19.2044 49 20V44C49 44.7957 49.3161 45.5587 49.8787 46.1213C50.4413 46.6839 51.2043 47 52 47C52.7957 47 53.5587 46.6839 54.1213 46.1213C54.6839 45.5587 55 44.7957 55 44V20C55 19.2044 54.6839 18.4413 54.1213 17.8787C53.5587 17.3161 52.7957 17 52 17Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
+import { Button } from '@/components/ui/button';
+import { HeartPulse, Mic } from 'lucide-react';
 
 interface WelcomeViewProps {
   startButtonText: string;
@@ -26,40 +11,108 @@ interface WelcomeViewProps {
 export const WelcomeView = ({
   startButtonText,
   onStartCall,
-  ref,
+  ...props
 }: React.ComponentProps<'div'> & WelcomeViewProps) => {
   return (
-    <div ref={ref}>
-      <section className="bg-background flex flex-col items-center justify-center text-center">
-        <WelcomeImage />
+    <div
+      {...props}
+      className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-gradient-to-br from-emerald-50 via-white to-teal-50 px-6 py-12"
+    >
+      {/* Background decoration */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-24 -top-24 h-72 w-72 rounded-full bg-emerald-200/30 blur-3xl" />
+        <div className="absolute -bottom-24 -right-24 h-72 w-72 rounded-full bg-teal-200/30 blur-3xl" />
+      </div>
 
-        <p className="text-foreground max-w-prose pt-1 leading-6 font-medium">
-          Chat live with your voice AI agent
+      {/* Main content */}
+      <main className="relative z-10 flex w-full max-w-xl flex-col items-center text-center">
+        {/* Logo / icon */}
+        <div className="mb-7 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 shadow-sm ring-8 ring-emerald-50">
+          <HeartPulse
+            className="h-10 w-10 text-emerald-600"
+            strokeWidth={1.8}
+          />
+        </div>
+
+        {/* Brand */}
+        <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+          Health Access
+        </h1>
+
+        <p className="mt-3 text-lg font-medium text-slate-600">
+          Your voice healthcare assistant
         </p>
 
+        {/* Description */}
+        <p className="mt-5 max-w-md text-sm leading-6 text-slate-500 sm:text-base">
+          Get general health information and guidance through a natural voice
+          conversation.
+        </p>
+
+        {/* Language support */}
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+          <span className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm ring-1 ring-slate-200">
+            🇮🇳 Hindi
+          </span>
+
+          <span className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm ring-1 ring-slate-200">
+            Hinglish
+          </span>
+
+          <span className="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm ring-1 ring-slate-200">
+            English
+          </span>
+        </div>
+
+        {/* Microphone button */}
+        <div className="relative mt-10">
+          <div className="absolute inset-0 animate-ping rounded-full bg-emerald-200 opacity-40" />
+
+          <Button
+            size="lg"
+            onClick={onStartCall}
+            className="relative flex h-24 w-24 rounded-full bg-emerald-600 p-0 shadow-xl shadow-emerald-600/20 transition-all duration-200 hover:scale-105 hover:bg-emerald-700 active:scale-95"
+            aria-label="Start talking"
+          >
+            <Mic className="h-10 w-10 text-white" strokeWidth={2} />
+          </Button>
+        </div>
+
+        {/* Start text */}
+        <p className="mt-6 text-lg font-semibold text-slate-800">
+          Ready to talk?
+        </p>
+
+        <p className="mt-1 text-sm text-slate-500">
+          Tap the microphone to start
+        </p>
+
+        {/* Main button */}
         <Button
           size="lg"
           onClick={onStartCall}
-          className="mt-6 w-64 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
+          className="mt-6 h-12 w-64 rounded-full bg-emerald-600 font-semibold shadow-lg shadow-emerald-600/20 hover:bg-emerald-700"
         >
-          {startButtonText}
+          <Mic className="mr-2 h-5 w-5" />
+          {startButtonText || 'Start Talking'}
         </Button>
-      </section>
 
-      <div className="fixed bottom-5 left-0 flex w-full items-center justify-center">
-        <p className="text-muted-foreground max-w-prose pt-1 text-xs leading-5 font-normal text-pretty md:text-sm">
-          Need help getting set up? Check out the{' '}
-          <a
-            target="_blank"
-            rel="noopener noreferrer"
-            href="https://docs.livekit.io/agents/start/voice-ai/"
-            className="underline"
-          >
-            Voice AI quickstart
-          </a>
-          .
+        {/* Safety information */}
+        <div className="mt-8 max-w-md rounded-2xl border border-emerald-100 bg-white/80 px-5 py-4 shadow-sm backdrop-blur-sm">
+          <p className="text-xs leading-5 text-slate-500 sm:text-sm">
+            Health Access provides general health information only. It does
+            not diagnose conditions, prescribe medication, or replace a
+            healthcare professional.
+          </p>
+        </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="absolute bottom-5 left-0 w-full px-6 text-center">
+        <p className="text-xs text-slate-400">
+          Health Access • Voice AI for easier healthcare access
         </p>
-      </div>
+      </footer>
     </div>
   );
 };
