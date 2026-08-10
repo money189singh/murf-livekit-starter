@@ -1,4 +1,6 @@
+import asyncio
 import logging
+
 from dotenv import load_dotenv
 
 from livekit import rtc
@@ -11,7 +13,6 @@ from livekit.agents import (
     RunContext,
     cli,
     function_tool,
-    inference,
     tokenize,
     room_io,
 )
@@ -27,6 +28,7 @@ from livekit.plugins import (
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from database import init_database, get_user, save_user
+from facilities import find_nearest_facility
 from prompt import SYSTEM_PROMPT
 
 
@@ -34,6 +36,10 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
+
+# ================================================================
+# ASSISTANT
+# ================================================================
 
 class Assistant(Agent):
 
@@ -44,6 +50,10 @@ class Assistant(Agent):
         super().__init__(
             instructions=SYSTEM_PROMPT
         )
+
+    # ============================================================
+    # TOOL 1: LOOK UP USER MEMORY
+    # ============================================================
 
     @function_tool
     async def lookup_user(
@@ -57,19 +67,29 @@ class Assistant(Agent):
         spoken with the assistant before.
         """
 
-        logger.info("Looking up user: %s", self.user_id)
+        logger.info(
+            "Looking up user: %s",
+            self.user_id
+        )
 
         user = get_user(self.user_id)
 
         if user is None:
-            logger.info("No previous memory found for user: %s", self.user_id)
+
+            logger.info(
+                "No previous memory found for user: %s",
+                self.user_id
+            )
 
             return {
                 "found": False,
                 "message": "No previous user information was found.",
             }
 
-        logger.info("Returning user found: %s", user["name"])
+        logger.info(
+            "Returning user found: %s",
+            user["name"]
+        )
 
         return {
             "found": True,
@@ -79,6 +99,10 @@ class Assistant(Agent):
             "last_triage_outcome": user["last_triage_outcome"],
             "last_interaction": user["last_interaction"],
         }
+
+    # ============================================================
+    # TOOL 2: SAVE USER MEMORY
+    # ============================================================
 
     @function_tool
     async def save_user_memory(
@@ -97,7 +121,10 @@ class Assistant(Agent):
         that the assistant may remember the information.
         """
 
-        logger.info("Saving approved memory for user: %s", self.user_id)
+        logger.info(
+            "Saving approved memory for user: %s",
+            self.user_id
+        )
 
         save_user(
             user_id=self.user_id,
@@ -112,11 +139,80 @@ class Assistant(Agent):
             "message": "The approved information has been saved.",
         }
 
+    # ============================================================
+    # TOOL 3: FIND NEAREST HEALTHCARE FACILITY
+    # ============================================================
+
+    @function_tool
+    async def find_healthcare_facility(
+        self,
+        context: RunContext,
+        location: str,
+    ):
+        """
+        Find real nearby healthcare facilities using live
+        OpenStreetMap data.
+
+        Use this tool whenever the user asks for a nearby
+        hospital, clinic, doctor, PHC, healthcare facility,
+        emergency facility, or medical center.
+
+        The location should be a city, neighborhood, area,
+        landmark, or other place provided by the user.
+        """
+
+        logger.info(
+            "Healthcare facility lookup requested for location: %s",
+            location
+        )
+
+        try:
+
+            # Run the normal blocking API request in a separate
+            # thread so it does not block the LiveKit agent.
+            result = await asyncio.to_thread(
+                find_nearest_facility,
+                location
+            )
+
+            logger.info(
+                "Healthcare facility lookup result: %s",
+                result
+            )
+
+            return result
+
+        except Exception as e:
+
+            logger.exception(
+                "Healthcare facility lookup failed: %s",
+                e
+            )
+
+            return {
+                "found": False,
+                "error": True,
+                "message": (
+                    "I couldn't access the live healthcare "
+                    "facility information right now. "
+                    "Please try again later."
+                ),
+            }
+
+
+# ================================================================
+# AGENT SERVER
+# ================================================================
 
 server = AgentServer()
 
 
+# ================================================================
+# PREWARM
+# ================================================================
+
 def prewarm(proc: JobProcess):
+
     proc.userdata["vad"] = silero.VAD.load()
 
     # Create the SQLite database/table if it doesn't exist.
@@ -125,6 +221,10 @@ def prewarm(proc: JobProcess):
 
 server.setup_fnc = prewarm
 
+
+# ================================================================
+# LIVEKIT SESSION
+# ================================================================
 
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext):
@@ -136,21 +236,37 @@ async def my_agent(ctx: JobContext):
     # Use the LiveKit room/participant identity as the caller ID.
     user_id = ctx.room.name
 
-    logger.info("Starting session for user: %s", user_id)
+    logger.info(
+        "Starting session for user: %s",
+        user_id
+    )
+
+    # ============================================================
+    # AGENT SESSION
+    # ============================================================
 
     session = AgentSession(
 
+        # --------------------------------------------------------
         # Speech-to-text
+        # --------------------------------------------------------
+
         stt=deepgram.STT(
             model="nova-3",
         ),
 
+        # --------------------------------------------------------
         # Language model
+        # --------------------------------------------------------
+
         llm=google.LLM(
             model="gemini-3.5-flash",
         ),
 
+        # --------------------------------------------------------
         # Text-to-speech
+        # --------------------------------------------------------
+
         tts=murf.TTS(
             voice="Abhinav",
             locale="hi-IN",
@@ -161,34 +277,60 @@ async def my_agent(ctx: JobContext):
             text_pacing=True,
         ),
 
+        # --------------------------------------------------------
         # Multilingual turn detection
+        # --------------------------------------------------------
+
         turn_detection=MultilingualModel(),
 
+        # --------------------------------------------------------
         # Voice activity detection
+        # --------------------------------------------------------
+
         vad=ctx.proc.userdata["vad"],
 
-        # Start generating responses before the user has completely
-        # finished speaking.
+        # --------------------------------------------------------
+        # Start generating responses before the user has
+        # completely finished speaking.
+        # --------------------------------------------------------
+
         preemptive_generation=True,
     )
 
+    # ============================================================
+    # START SESSION
+    # ============================================================
+
     await session.start(
-        agent=Assistant(user_id=user_id),
+
+        agent=Assistant(
+            user_id=user_id
+        ),
+
         room=ctx.room,
+
         room_options=room_io.RoomOptions(
+
             audio_input=room_io.AudioInputOptions(
+
                 noise_cancellation=lambda params: (
                     noise_cancellation.BVCTelephony()
                     if params.participant.kind
                     == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
                     else noise_cancellation.BVC()
                 ),
+
             ),
         ),
     )
 
+    # Connect the agent to the LiveKit room.
     await ctx.connect()
 
+
+# ================================================================
+# RUN APPLICATION
+# ================================================================
 
 if __name__ == "__main__":
     cli.run_app(server)
