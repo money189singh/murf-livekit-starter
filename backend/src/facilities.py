@@ -1,18 +1,30 @@
 import math
+import time
 import requests
 
 
 # ============================================================
-# FREE OPENSTREETMAP APIs
+# CONFIGURATION
 # ============================================================
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+
+USER_AGENT = (
+    "HealthAccessVoiceAgent/1.0 "
+    "(educational project)"
+)
+
+REQUEST_TIMEOUT = 20
 
 
 # ============================================================
-# CALCULATE DISTANCE
+# DISTANCE
 # ============================================================
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -20,18 +32,18 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     Calculate distance between two coordinates in kilometers.
     """
 
-    earth_radius = 6371
+    earth_radius = 6371.0
 
-    lat1 = math.radians(lat1)
-    lat2 = math.radians(lat2)
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
 
     delta_lat = math.radians(lat2 - lat1)
     delta_lon = math.radians(lon2 - lon1)
 
     a = (
         math.sin(delta_lat / 2) ** 2
-        + math.cos(lat1)
-        * math.cos(lat2)
+        + math.cos(lat1_rad)
+        * math.cos(lat2_rad)
         * math.sin(delta_lon / 2) ** 2
     )
 
@@ -44,311 +56,723 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 
 # ============================================================
-# FIND NEAREST HEALTHCARE FACILITIES
+# HEADERS
 # ============================================================
 
-def find_nearest_facility(location: str):
-    """
-    Find real nearby healthcare facilities using
-    OpenStreetMap and Overpass API.
+HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json",
+}
 
-    This uses free public APIs and does not require
-    an API key.
-    """
 
-    try:
+# ============================================================
+# GEOCODE LOCATION
+# ============================================================
 
-        # ====================================================
-        # STEP 1
-        # Convert location into latitude/longitude
-        # ====================================================
+def geocode_location(location: str):
 
-        response = requests.get(
-            NOMINATIM_URL,
-            params={
-                "q": location,
-                "format": "jsonv2",
-                "limit": 1,
-                "countrycodes": "in",
-            },
-            headers={
-                "User-Agent": (
-                    "HealthcareVoiceAgent/1.0 "
-                    "(educational project)"
+    location = location.strip()
+
+    if not location:
+        return None
+
+    # --------------------------------------------------------
+    # Try the exact user input first
+    # --------------------------------------------------------
+
+    queries = [
+        location,
+        f"{location}, India",
+    ]
+
+    for query in queries:
+
+        try:
+
+            print(
+                f"[FACILITY] Geocoding: {query}"
+            )
+
+            response = requests.get(
+                NOMINATIM_URL,
+                params={
+                    "q": query,
+                    "format": "jsonv2",
+                    "limit": 5,
+                    "addressdetails": 1,
+                    "countrycodes": "in",
+                },
+                headers=HEADERS,
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            response.raise_for_status()
+
+            results = response.json()
+
+            if not results:
+                continue
+
+            # ------------------------------------------------
+            # Prefer results that look like a locality/city
+            # ------------------------------------------------
+
+            preferred = None
+
+            for result in results:
+
+                result_type = result.get(
+                    "type",
+                    ""
                 )
-            },
-            timeout=10,
-        )
 
-        response.raise_for_status()
+                result_class = result.get(
+                    "class",
+                    ""
+                )
 
-        locations = response.json()
+                if (
+                    result_type in {
+                        "city",
+                        "town",
+                        "village",
+                        "suburb",
+                        "neighbourhood",
+                        "administrative",
+                        "residential",
+                    }
+                    or result_class == "place"
+                ):
+                    preferred = result
+                    break
 
-        if not locations:
+            if preferred is None:
+                preferred = results[0]
+
+            latitude = float(
+                preferred["lat"]
+            )
+
+            longitude = float(
+                preferred["lon"]
+            )
+
+            display_name = preferred.get(
+                "display_name",
+                query,
+            )
+
+            print(
+                "[FACILITY] Location resolved:"
+                f" {display_name}"
+            )
+
+            print(
+                "[FACILITY] Coordinates:"
+                f" {latitude}, {longitude}"
+            )
 
             return {
-                "found": False,
-                "message": (
-                    f"I couldn't find the location "
-                    f"{location}."
-                ),
+                "latitude": latitude,
+                "longitude": longitude,
+                "display_name": display_name,
             }
 
-        latitude = float(
-            locations[0]["lat"]
-        )
+        except requests.exceptions.RequestException as error:
 
-        longitude = float(
-            locations[0]["lon"]
-        )
+            print(
+                f"[FACILITY] Geocoding error: {error}"
+            )
 
-        logger_message = (
-            f"Location found: {location} "
-            f"({latitude}, {longitude})"
-        )
+        except Exception as error:
 
-        print(logger_message)
+            print(
+                f"[FACILITY] Geocoding unexpected error: {error}"
+            )
 
-        # ====================================================
-        # STEP 2
-        # Search OpenStreetMap for healthcare facilities
-        # within 5 KM
-        # ====================================================
+    return None
 
-        query = f"""
-[out:json][timeout:20];
+
+# ============================================================
+# OVERPASS QUERY
+# ============================================================
+
+def build_overpass_query(
+    latitude,
+    longitude,
+    radius,
+):
+
+    return f"""
+[out:json][timeout:45];
 
 (
-  node["amenity"="hospital"](around:5000,{latitude},{longitude});
-  way["amenity"="hospital"](around:5000,{latitude},{longitude});
-  relation["amenity"="hospital"](around:5000,{latitude},{longitude});
+    nwr["amenity"="hospital"](around:{radius},{latitude},{longitude});
+    nwr["amenity"="clinic"](around:{radius},{latitude},{longitude});
+    nwr["amenity"="doctors"](around:{radius},{latitude},{longitude});
 
-  node["amenity"="clinic"](around:5000,{latitude},{longitude});
-  way["amenity"="clinic"](around:5000,{latitude},{longitude});
-  relation["amenity"="clinic"](around:5000,{latitude},{longitude});
+    nwr["healthcare"="hospital"](around:{radius},{latitude},{longitude});
+    nwr["healthcare"="clinic"](around:{radius},{latitude},{longitude});
+    nwr["healthcare"="doctor"](around:{radius},{latitude},{longitude});
+    nwr["healthcare"="centre"](around:{radius},{latitude},{longitude});
+    nwr["healthcare"="hospital_ward"](around:{radius},{latitude},{longitude});
 
-  node["amenity"="doctors"](around:5000,{latitude},{longitude});
-  way["amenity"="doctors"](around:5000,{latitude},{longitude});
-  relation["amenity"="doctors"](around:5000,{latitude},{longitude});
+    nwr["healthcare"="pharmacy"](around:{radius},{latitude},{longitude});
 );
 
 out center tags;
 """
 
-        # ====================================================
-        # STEP 3
-        # Send query to Overpass
-        # ====================================================
 
-        response = requests.post(
-            OVERPASS_URL,
-            data=query,
-            headers={
-                "User-Agent": (
-                    "HealthcareVoiceAgent/1.0 "
-                    "(educational project)"
+# ============================================================
+# QUERY OVERPASS
+# ============================================================
+
+def query_overpass(
+    latitude,
+    longitude,
+    radius,
+):
+
+    query = build_overpass_query(
+        latitude,
+        longitude,
+        radius,
+    )
+
+    for endpoint in OVERPASS_ENDPOINTS:
+
+        try:
+
+            print(
+                "[FACILITY] Trying Overpass:"
+                f" {endpoint}"
+            )
+
+            response = requests.post(
+                endpoint,
+                data=query,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Content-Type": "text/plain",
+                },
+                timeout=60,
+            )
+
+            response.raise_for_status()
+
+            data = response.json()
+
+            elements = data.get(
+                "elements",
+                [],
+            )
+
+            print(
+                "[FACILITY] Overpass returned"
+                f" {len(elements)} elements."
+            )
+
+            return elements
+
+        except requests.exceptions.RequestException as error:
+
+            print(
+                "[FACILITY] Overpass endpoint failed:"
+                f" {error}"
+            )
+
+            continue
+
+        except Exception as error:
+
+            print(
+                "[FACILITY] Overpass parsing error:"
+                f" {error}"
+            )
+
+            continue
+
+    return []
+
+
+# ============================================================
+# FACILITY TYPE
+# ============================================================
+
+def get_facility_type(tags):
+
+    healthcare = tags.get(
+        "healthcare",
+        "",
+    ).lower()
+
+    amenity = tags.get(
+        "amenity",
+        "",
+    ).lower()
+
+    mapping = {
+        "hospital": "Hospital",
+        "clinic": "Clinic",
+        "doctor": "Doctor / Clinic",
+        "doctors": "Doctor / Clinic",
+        "centre": "Healthcare Centre",
+        "hospital_ward": "Hospital",
+        "pharmacy": "Pharmacy",
+    }
+
+    if healthcare in mapping:
+        return mapping[healthcare]
+
+    if amenity in mapping:
+        return mapping[amenity]
+
+    return "Healthcare Facility"
+
+
+# ============================================================
+# GET FACILITY COORDINATES
+# ============================================================
+
+def get_element_coordinates(element):
+
+    # --------------------------------------------------------
+    # Node
+    # --------------------------------------------------------
+
+    if (
+        "lat" in element
+        and "lon" in element
+    ):
+
+        return (
+            float(element["lat"]),
+            float(element["lon"]),
+        )
+
+    # --------------------------------------------------------
+    # Way / Relation center
+    # --------------------------------------------------------
+
+    center = element.get(
+        "center"
+    )
+
+    if center:
+
+        if (
+            "lat" in center
+            and "lon" in center
+        ):
+
+            return (
+                float(center["lat"]),
+                float(center["lon"]),
+            )
+
+    return None
+
+
+# ============================================================
+# BUILD ADDRESS
+# ============================================================
+
+def build_address(tags):
+
+    address_parts = []
+
+    keys = [
+        "addr:housenumber",
+        "addr:street",
+        "addr:neighbourhood",
+        "addr:suburb",
+        "addr:city",
+        "addr:district",
+        "addr:state",
+        "addr:postcode",
+    ]
+
+    for key in keys:
+
+        value = tags.get(key)
+
+        if value:
+
+            value = str(value).strip()
+
+            if value:
+                address_parts.append(
+                    value
                 )
-            },
-            timeout=30,
-        )
 
-        response.raise_for_status()
+    return ", ".join(
+        address_parts
+    )
 
-        data = response.json()
 
-        # ====================================================
-        # STEP 4
-        # Process results
-        # ====================================================
+# ============================================================
+# BUILD FACILITY
+# ============================================================
 
-        facilities = []
+def build_facility(
+    element,
+    user_lat,
+    user_lon,
+):
 
-        for element in data.get("elements", []):
+    tags = element.get(
+        "tags",
+        {},
+    )
 
-            tags = element.get("tags", {})
+    # --------------------------------------------------------
+    # Name
+    # --------------------------------------------------------
 
-            name = tags.get("name")
+    name = (
+        tags.get("name")
+        or tags.get("official_name")
+        or tags.get("short_name")
+        or tags.get("brand")
+    )
 
-            # Ignore unnamed facilities
-            if not name:
-                continue
+    if not name:
+        return None
 
-            # ------------------------------------------------
-            # Get coordinates
-            # ------------------------------------------------
+    name = name.strip()
 
-            if (
-                "lat" in element
-                and "lon" in element
-            ):
+    # --------------------------------------------------------
+    # Coordinates
+    # --------------------------------------------------------
 
-                facility_lat = element["lat"]
-                facility_lon = element["lon"]
+    coordinates = get_element_coordinates(
+        element
+    )
 
-            elif "center" in element:
+    if coordinates is None:
+        return None
 
-                facility_lat = element["center"]["lat"]
-                facility_lon = element["center"]["lon"]
+    facility_lat, facility_lon = coordinates
 
-            else:
+    # --------------------------------------------------------
+    # Distance
+    # --------------------------------------------------------
 
-                continue
+    distance = calculate_distance(
+        user_lat,
+        user_lon,
+        facility_lat,
+        facility_lon,
+    )
 
-            # ------------------------------------------------
-            # Calculate distance
-            # ------------------------------------------------
+    # --------------------------------------------------------
+    # Contact
+    # --------------------------------------------------------
 
-            distance = calculate_distance(
-                latitude,
-                longitude,
-                facility_lat,
-                facility_lon,
-            )
+    phone = (
+        tags.get("phone")
+        or tags.get("contact:phone")
+        or ""
+    )
 
-            # ------------------------------------------------
-            # Get facility information
-            # ------------------------------------------------
+    website = (
+        tags.get("website")
+        or tags.get("contact:website")
+        or ""
+    )
 
-            facility_type = tags.get(
-                "amenity",
-                "healthcare"
-            )
+    opening_hours = tags.get(
+        "opening_hours",
+        "",
+    )
 
-            address_parts = []
+    # --------------------------------------------------------
+    # Address
+    # --------------------------------------------------------
 
-            for key in [
-                "addr:housenumber",
-                "addr:street",
-                "addr:suburb",
-                "addr:city",
-            ]:
+    address = build_address(
+        tags
+    )
 
-                value = tags.get(key)
+    # --------------------------------------------------------
+    # Type
+    # --------------------------------------------------------
 
-                if value:
-                    address_parts.append(value)
+    facility_type = get_facility_type(
+        tags
+    )
 
-            address = ", ".join(address_parts)
+    return {
+        "name": name,
+        "type": facility_type,
+        "distance_km": round(
+            distance,
+            2,
+        ),
+        "latitude": facility_lat,
+        "longitude": facility_lon,
+        "address": address,
+        "phone": phone,
+        "website": website,
+        "opening_hours": opening_hours,
+    }
 
-            phone = tags.get("phone", "")
 
-            website = tags.get("website", "")
+# ============================================================
+# FIND NEAREST HEALTHCARE FACILITIES
+# ============================================================
 
-            facilities.append(
-                {
-                    "name": name,
-                    "type": facility_type,
-                    "distance_km": round(
-                        distance,
-                        2
-                    ),
-                    "latitude": facility_lat,
-                    "longitude": facility_lon,
-                    "address": address,
-                    "phone": phone,
-                    "website": website,
-                }
-            )
+def find_nearest_facility(
+    location: str,
+):
 
-        # ====================================================
-        # STEP 5
-        # Sort nearest first
-        # ====================================================
+    location = (
+        location or ""
+    ).strip()
 
-        facilities.sort(
-            key=lambda facility:
-            facility["distance_km"]
-        )
-
-        # ====================================================
-        # STEP 6
-        # No facilities found
-        # ====================================================
-
-        if not facilities:
-
-            return {
-                "found": False,
-                "message": (
-                    "I couldn't find a mapped healthcare "
-                    f"facility within 5 kilometers of "
-                    f"{location}."
-                ),
-                "data_source": (
-                    "OpenStreetMap / Overpass"
-                ),
-            }
-
-        # ====================================================
-        # STEP 7
-        # Return top 5 nearest facilities
-        # ====================================================
+    if not location:
 
         return {
-            "found": True,
+            "found": False,
+            "error": "missing_location",
+            "message": (
+                "Please provide a city, area, "
+                "locality, or PIN code."
+            ),
+        }
+
+    print(
+        "================================================"
+    )
+
+    print(
+        "[FACILITY] SEARCH STARTED"
+    )
+
+    print(
+        f"[FACILITY] User location: {location}"
+    )
+
+    print(
+        "================================================"
+    )
+
+    # ========================================================
+    # STEP 1 — GEOCODE
+    # ========================================================
+
+    location_data = geocode_location(
+        location
+    )
+
+    if location_data is None:
+
+        print(
+            "[FACILITY] Could not geocode location."
+        )
+
+        return {
+            "found": False,
+            "error": "location_not_found",
+            "message": (
+                f"I couldn't identify '{location}'. "
+                "Please tell me your city, area, "
+                "locality, or PIN code."
+            ),
+        }
+
+    latitude = location_data[
+        "latitude"
+    ]
+
+    longitude = location_data[
+        "longitude"
+    ]
+
+    display_name = location_data[
+        "display_name"
+    ]
+
+    # ========================================================
+    # STEP 2 — PROGRESSIVE SEARCH
+    # ========================================================
+
+    # Start small.
+    # If nothing is found, expand.
+
+    search_radii = [
+        5000,
+        10000,
+        20000,
+    ]
+
+    elements = []
+
+    used_radius = None
+
+    for radius in search_radii:
+
+        print(
+            "[FACILITY] Searching radius:"
+            f" {radius / 1000:.0f} km"
+        )
+
+        elements = query_overpass(
+            latitude,
+            longitude,
+            radius,
+        )
+
+        if elements:
+
+            used_radius = radius
+
+            print(
+                "[FACILITY] Facilities found "
+                f"within {radius / 1000:.0f} km."
+            )
+
+            break
+
+        print(
+            "[FACILITY] No facilities in "
+            f"{radius / 1000:.0f} km."
+        )
+
+        # Small delay before retry
+        time.sleep(0.5)
+
+    # ========================================================
+    # STEP 3 — PROCESS
+    # ========================================================
+
+    facilities = []
+
+    seen = set()
+
+    for element in elements:
+
+        facility = build_facility(
+            element,
+            latitude,
+            longitude,
+        )
+
+        if facility is None:
+            continue
+
+        # ----------------------------------------------------
+        # Deduplicate by name + coordinates
+        # ----------------------------------------------------
+
+        key = (
+            facility["name"].lower().strip(),
+            round(facility["latitude"], 5),
+            round(facility["longitude"], 5),
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        facilities.append(
+            facility
+        )
+
+    # ========================================================
+    # STEP 4 — SORT
+    # ========================================================
+
+    facilities.sort(
+        key=lambda item:
+        item["distance_km"]
+    )
+
+    # ========================================================
+    # STEP 5 — NO RESULTS
+    # ========================================================
+
+    if not facilities:
+
+        print(
+            "[FACILITY] No healthcare facilities found."
+        )
+
+        return {
+            "found": False,
             "location": location,
-            "facilities": facilities[:5],
+            "resolved_location": display_name,
+            "error": "no_facilities",
+            "message": (
+                "I couldn't find any mapped healthcare "
+                "facilities near this location. "
+                "You can try a nearby larger locality "
+                "or city."
+            ),
             "data_source": (
                 "OpenStreetMap / Overpass"
             ),
         }
 
     # ========================================================
-    # TIMEOUT
+    # STEP 6 — TOP 5
     # ========================================================
 
-    except requests.exceptions.Timeout:
+    top_facilities = facilities[:5]
+
+    print(
+        "================================================"
+    )
+
+    print(
+        f"[FACILITY] TOTAL FOUND: {len(facilities)}"
+    )
+
+    print(
+        "[FACILITY] CLOSEST FACILITIES:"
+    )
+
+    for index, facility in enumerate(
+        top_facilities,
+        start=1,
+    ):
 
         print(
-            "Healthcare API request timed out."
+            f"{index}. "
+            f"{facility['name']} | "
+            f"{facility['type']} | "
+            f"{facility['distance_km']} km"
         )
 
-        return {
-            "found": False,
-            "error": "timeout",
-            "message": (
-                "The live healthcare location service "
-                "is taking too long to respond. "
-                "Please try again."
-            ),
-        }
+    print(
+        "================================================"
+    )
 
     # ========================================================
-    # API / NETWORK ERROR
+    # STEP 7 — RETURN STRUCTURED RESPONSE
     # ========================================================
 
-    except requests.exceptions.RequestException as error:
-
-        print(
-            f"Healthcare API error: {error}"
-        )
-
-        return {
-            "found": False,
-            "error": "api_error",
-            "message": (
-                "The live healthcare location service "
-                "is temporarily unavailable. "
-                "I don't want to give you an unverified "
-                "facility, so please try again later."
-            ),
-        }
-
-    # ========================================================
-    # OTHER ERROR
-    # ========================================================
-
-    except Exception as error:
-
-        print(
-            f"Unexpected healthcare lookup error: {error}"
-        )
-
-        return {
-            "found": False,
-            "error": "unknown_error",
-            "message": (
-                "I couldn't complete the live healthcare "
-                "facility search right now."
-            ),
-        }
+    return {
+        "found": True,
+        "location": location,
+        "resolved_location": display_name,
+        "search_radius_km": (
+            used_radius / 1000
+            if used_radius
+            else None
+        ),
+        "count": len(
+            top_facilities
+        ),
+        "facilities": top_facilities,
+        "data_source": (
+            "OpenStreetMap / Overpass"
+        ),
+        "message": (
+            f"I found {len(top_facilities)} "
+            "healthcare facilities near "
+            f"{location}."
+        ),
+    }
