@@ -8,13 +8,11 @@ The agent is designed to help users understand healthcare access options, find n
 
 ## 🎥 Demo Video
 
-[![Health Access Voice Agent Demo](./health-access-voice-agent-thumbnail.png)](https://youtu.be/68wc4B4l2e0)
+[![Health Access Voice Agent Demo](https://i.ytimg.com/vi/68wc4B4l2e0/maxresdefault.jpg)](https://youtu.be/68wc4B4l2e0)
 
-**▶️ Click the thumbnail to watch the demo on YouTube**
+▶️ **[Watch the full Health Access Voice Agent Demo on YouTube](https://youtu.be/68wc4B4l2e0)**
 
-Built as part of **10 Days of Voice Agents — VoiceForBharat Edition**.
----
-
+Built as part of **10 Days of Voice Agents — VoiceForBharat Edition** using **LiveKit** and **Murf Falcon**.
 ## 🎙️ What is this project?
 
 The Health Access Voice Agent is a conversational AI assistant that allows users to interact with a healthcare-access system using their voice.
