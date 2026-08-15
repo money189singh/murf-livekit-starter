@@ -6,6 +6,13 @@ The agent is designed to help users understand healthcare access options, find n
 
 > ⚠️ This project is an AI healthcare access assistant, not a doctor or medical professional. It does not diagnose medical conditions or prescribe medication.
 
+## 🎥 Demo Video
+
+[![Health Access Voice Agent Demo](./health-access-voice-agent-thumbnail.png)](https://youtu.be/68wc4B4l2e0)
+
+**▶️ Click the thumbnail to watch the demo on YouTube**
+
+Built as part of **10 Days of Voice Agents — VoiceForBharat Edition**.
 ---
 
 ## 🎙️ What is this project?
