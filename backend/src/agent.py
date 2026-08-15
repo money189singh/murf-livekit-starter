@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import sqlite3
 import uuid
 from datetime import datetime
@@ -8,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from livekit import rtc
+
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -17,21 +19,25 @@ from livekit.agents import (
     RunContext,
     cli,
     function_tool,
-    tokenize,
+    inference,
     room_io,
+    tokenize,
 )
 
 from livekit.plugins import (
-    murf,
-    silero,
-    google,
     deepgram,
+    groq,
+    murf,
     noise_cancellation,
+    silero,
 )
 
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from database import (
+    init_database,
+    get_user,
+    save_user,
+)
 
-from database import init_database, get_user, save_user
 from facilities import find_nearest_facility
 from prompt import SYSTEM_PROMPT
 
@@ -42,9 +48,111 @@ from prompt import SYSTEM_PROMPT
 
 logger = logging.getLogger("agent")
 
-load_dotenv(".env.local")
+# agent.py is inside:
+# backend/src/agent.py
+#
+# Therefore .env.local is:
+# backend/.env.local
+
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env.local"
+
+load_dotenv(ENV_FILE)
 
 DATABASE_PATH = Path(__file__).parent / "health_access.db"
+
+
+# ================================================================
+# API KEYS
+# ================================================================
+
+LIVEKIT_URL = os.getenv("LIVEKIT_URL")
+
+LIVEKIT_API_KEY = os.getenv(
+    "LIVEKIT_API_KEY"
+)
+
+LIVEKIT_API_SECRET = os.getenv(
+    "LIVEKIT_API_SECRET"
+)
+
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY"
+)
+
+DEEPGRAM_API_KEY = os.getenv(
+    "DEEPGRAM_API_KEY"
+)
+
+MURF_API_KEY = os.getenv(
+    "MURF_API_KEY"
+)
+
+AGENT_NAME = os.getenv(
+    "AGENT_NAME",
+    "my-agent",
+)
+
+
+# ================================================================
+# ENVIRONMENT VALIDATION
+# ================================================================
+
+def validate_environment():
+
+    logger.info(
+        "Checking environment variables..."
+    )
+
+    missing = []
+
+    if not LIVEKIT_URL:
+        missing.append("LIVEKIT_URL")
+
+    if not LIVEKIT_API_KEY:
+        missing.append("LIVEKIT_API_KEY")
+
+    if not LIVEKIT_API_SECRET:
+        missing.append("LIVEKIT_API_SECRET")
+
+    if not GROQ_API_KEY:
+        missing.append("GROQ_API_KEY")
+
+    if not DEEPGRAM_API_KEY:
+        missing.append("DEEPGRAM_API_KEY")
+
+    if not MURF_API_KEY:
+        missing.append("MURF_API_KEY")
+
+    if missing:
+
+        raise RuntimeError(
+            "Missing environment variables: "
+            + ", ".join(missing)
+        )
+
+    logger.info(
+        "Environment variables loaded successfully."
+    )
+
+    logger.info(
+        "LiveKit URL: %s",
+        LIVEKIT_URL,
+    )
+
+    logger.info(
+        "Groq API key loaded: %s...",
+        GROQ_API_KEY[:8],
+    )
+
+    logger.info(
+        "Deepgram API key loaded: %s...",
+        DEEPGRAM_API_KEY[:8],
+    )
+
+    logger.info(
+        "Murf API key loaded: %s...",
+        MURF_API_KEY[:8],
+    )
 
 
 # ================================================================
@@ -52,11 +160,10 @@ DATABASE_PATH = Path(__file__).parent / "health_access.db"
 # ================================================================
 
 def init_escalation_database():
-    """
-    Create the escalation table if it does not already exist.
-    """
 
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(
+        DATABASE_PATH
+    )
 
     cursor = connection.cursor()
 
@@ -78,7 +185,12 @@ def init_escalation_database():
     )
 
     connection.commit()
+
     connection.close()
+
+    logger.info(
+        "Escalation database initialized."
+    )
 
 
 def save_escalation(
@@ -89,9 +201,6 @@ def save_escalation(
     language: str,
     preferred_followup: str,
 ):
-    """
-    Save a human escalation request.
-    """
 
     reference_id = (
         f"ESC-{datetime.now().strftime('%Y%m%d')}-"
@@ -102,7 +211,9 @@ def save_escalation(
         timespec="seconds"
     )
 
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(
+        DATABASE_PATH
+    )
 
     cursor = connection.cursor()
 
@@ -135,13 +246,17 @@ def save_escalation(
     )
 
     connection.commit()
+
     connection.close()
 
     return {
         "success": True,
         "reference_id": reference_id,
         "status": "open",
-        "message": "Human assistance request created successfully.",
+        "message": (
+            "Human assistance request "
+            "created successfully."
+        ),
     }
 
 
@@ -150,11 +265,10 @@ def save_escalation(
 # ================================================================
 
 def init_analytics_database():
-    """
-    Create the call analytics table.
-    """
 
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(
+        DATABASE_PATH
+    )
 
     cursor = connection.cursor()
 
@@ -171,9 +285,12 @@ def init_analytics_database():
     )
 
     connection.commit()
+
     connection.close()
 
-    logger.info("Call analytics database initialized.")
+    logger.info(
+        "Call analytics database initialized."
+    )
 
 
 def save_call_analytics(
@@ -182,17 +299,16 @@ def save_call_analytics(
     ended_at: str,
     outcome: str,
 ):
-    """
-    Save one completed call.
-    """
 
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(
+        DATABASE_PATH
+    )
 
     cursor = connection.cursor()
 
     cursor.execute(
         """
-        INSERT INTO call_analytics (
+        INSERT OR REPLACE INTO call_analytics (
             call_id,
             started_at,
             ended_at,
@@ -209,6 +325,7 @@ def save_call_analytics(
     )
 
     connection.commit()
+
     connection.close()
 
     logger.info(
@@ -219,7 +336,153 @@ def save_call_analytics(
 
 
 # ================================================================
-# ASSISTANT
+# CLINIC & APPOINTMENT SPECIALIST
+# ================================================================
+
+class ClinicAppointmentSpecialist(Agent):
+
+    def __init__(
+        self,
+        user_id: str,
+        call_state: dict,
+        chat_ctx=None,
+    ) -> None:
+
+        self.user_id = user_id
+
+        self.call_state = call_state
+
+        super().__init__(
+            instructions="""
+You are the Clinic and Appointment Specialist
+for the Health Access voice assistant.
+
+Your job is focused and limited.
+
+You help users:
+
+- Find nearby healthcare facilities.
+- Understand general clinic or hospital access.
+- Understand what information they may need when
+  contacting a clinic.
+- Understand general appointment preparation.
+- Help users navigate healthcare access.
+
+You are NOT a doctor, nurse, pharmacist,
+or medical professional.
+
+You MUST NOT:
+
+- Diagnose medical conditions.
+- Prescribe medicines.
+- Recommend prescription medicines.
+- Give personalized medication dosages.
+- Create treatment plans.
+- Interpret medical tests as a diagnosis.
+- Claim that you contacted a clinic.
+- Claim that you booked an appointment unless
+  a real booking system confirms it.
+
+If the user describes potentially serious emergency
+symptoms, do not spend time on appointment planning.
+Tell them to seek urgent professional medical attention.
+
+Use the healthcare facility lookup tool when the user
+asks for a nearby hospital, clinic, PHC, healthcare
+facility, or medical center.
+
+Language:
+
+- Match the user's language.
+- Support English, Hindi, and Hinglish.
+- Use natural Indian conversational language.
+- Do not use overly formal Hindi.
+
+Voice style:
+
+- Be concise.
+- Ask one question at a time.
+- Be friendly and practical.
+- Do not repeat information the user already provided.
+
+The user has already been speaking with the main
+Health Access Assistant.
+
+Continue naturally from the existing conversation.
+
+When you take over, briefly introduce yourself and
+acknowledge the reason for the handoff.
+""",
+            chat_ctx=chat_ctx,
+        )
+
+    async def on_enter(self):
+
+        logger.info(
+            "Clinic Appointment Specialist entered."
+        )
+
+        await self.session.generate_reply(
+            instructions=(
+                "Introduce yourself briefly as the Clinic "
+                "and Appointment Specialist. Acknowledge "
+                "the user's clinic or appointment request "
+                "and continue helping."
+            )
+        )
+
+    @function_tool
+    async def find_healthcare_facility(
+        self,
+        context: RunContext,
+        location: str,
+    ):
+
+        logger.info(
+            "Specialist facility lookup: %s",
+            location,
+        )
+
+        try:
+
+            result = await asyncio.to_thread(
+                find_nearest_facility,
+                location,
+            )
+
+            logger.info(
+                "Specialist facility result: %s",
+                result,
+            )
+
+            if result and result.get("found"):
+
+                self.call_state[
+                    "successful"
+                ] = True
+
+            return result
+
+        except Exception as e:
+
+            logger.exception(
+                "Specialist facility lookup failed: %s",
+                e,
+            )
+
+            return {
+                "found": False,
+                "error": True,
+                "message": (
+                    "I couldn't access the healthcare "
+                    "facility information right now. "
+                    "Please try again later."
+                ),
+            }
+
+
+# ================================================================
+# MAIN HEALTH ACCESS ASSISTANT
 # ================================================================
 
 class Assistant(Agent):
@@ -231,6 +494,7 @@ class Assistant(Agent):
     ) -> None:
 
         self.user_id = user_id
+
         self.call_state = call_state
 
         super().__init__(
@@ -238,7 +502,7 @@ class Assistant(Agent):
         )
 
     # ============================================================
-    # TOOL 1: LOOK UP USER MEMORY
+    # USER MEMORY
     # ============================================================
 
     @function_tool
@@ -246,35 +510,59 @@ class Assistant(Agent):
         self,
         context: RunContext,
     ):
-        """
-        Look up the current caller in the memory database.
-        """
 
         logger.info(
             "Looking up user: %s",
-            self.user_id
+            self.user_id,
         )
 
-        user = get_user(self.user_id)
+        try:
 
-        if user is None:
+            user = get_user(
+                self.user_id
+            )
+
+            if user is None:
+
+                return {
+                    "found": False,
+                    "message": (
+                        "No previous user information "
+                        "was found."
+                    ),
+                }
+
+            return {
+                "found": True,
+                "name": user["name"],
+                "language_preference": (
+                    user["language_preference"]
+                ),
+                "age_band": user["age_band"],
+                "last_triage_outcome": (
+                    user["last_triage_outcome"]
+                ),
+                "last_interaction": (
+                    user["last_interaction"]
+                ),
+            }
+
+        except Exception:
+
+            logger.exception(
+                "User lookup failed."
+            )
 
             return {
                 "found": False,
-                "message": "No previous user information was found.",
+                "error": True,
+                "message": (
+                    "Unable to access user memory."
+                ),
             }
 
-        return {
-            "found": True,
-            "name": user["name"],
-            "language_preference": user["language_preference"],
-            "age_band": user["age_band"],
-            "last_triage_outcome": user["last_triage_outcome"],
-            "last_interaction": user["last_interaction"],
-        }
-
     # ============================================================
-    # TOOL 2: SAVE USER MEMORY
+    # SAVE USER MEMORY
     # ============================================================
 
     @function_tool
@@ -286,30 +574,46 @@ class Assistant(Agent):
         age_band: str | None = None,
         last_triage_outcome: str | None = None,
     ):
-        """
-        Save limited user memory after explicit permission.
-        """
 
         logger.info(
             "Saving approved memory for user: %s",
-            self.user_id
+            self.user_id,
         )
 
-        save_user(
-            user_id=self.user_id,
-            name=name,
-            language_preference=language_preference,
-            age_band=age_band,
-            last_triage_outcome=last_triage_outcome,
-        )
+        try:
 
-        return {
-            "success": True,
-            "message": "The approved information has been saved.",
-        }
+            save_user(
+                user_id=self.user_id,
+                name=name,
+                language_preference=language_preference,
+                age_band=age_band,
+                last_triage_outcome=last_triage_outcome,
+            )
+
+            return {
+                "success": True,
+                "message": (
+                    "The approved information "
+                    "has been saved."
+                ),
+            }
+
+        except Exception:
+
+            logger.exception(
+                "Saving user memory failed."
+            )
+
+            return {
+                "success": False,
+                "message": (
+                    "Unable to save the approved "
+                    "information."
+                ),
+            }
 
     # ============================================================
-    # TOOL 3: FIND NEAREST HEALTHCARE FACILITY
+    # FIND HEALTHCARE FACILITY
     # ============================================================
 
     @function_tool
@@ -318,54 +622,50 @@ class Assistant(Agent):
         context: RunContext,
         location: str,
     ):
-        """
-        Find healthcare facilities using the existing facility
-        lookup system.
-        """
 
         logger.info(
             "Healthcare facility lookup requested: %s",
-            location
+            location,
         )
 
         try:
 
             result = await asyncio.to_thread(
                 find_nearest_facility,
-                location
+                location,
             )
 
             logger.info(
                 "Healthcare facility lookup result: %s",
-                result
+                result,
             )
 
-            # A successful facility lookup counts as a successful
-            # call outcome.
             if result and result.get("found"):
 
-                self.call_state["successful"] = True
+                self.call_state[
+                    "successful"
+                ] = True
 
             return result
 
-        except Exception as e:
+        except Exception:
 
             logger.exception(
-                "Healthcare facility lookup failed: %s",
-                e
+                "Healthcare facility lookup failed."
             )
 
             return {
                 "found": False,
                 "error": True,
                 "message": (
-                    "I couldn't access the healthcare facility "
-                    "information right now. Please try again later."
+                    "I couldn't access the healthcare "
+                    "facility information right now. "
+                    "Please try again later."
                 ),
             }
 
     # ============================================================
-    # TOOL 4: CREATE HUMAN ESCALATION
+    # HUMAN ESCALATION
     # ============================================================
 
     @function_tool
@@ -378,15 +678,10 @@ class Assistant(Agent):
         language: str,
         preferred_followup: str,
     ):
-        """
-        Create a human-help request.
-
-        This tool must only be called after the caller has explicitly
-        given permission.
-        """
 
         logger.info(
-            "Human escalation requested. User=%s Reason=%s",
+            "Human escalation requested. "
+            "User=%s Reason=%s",
             self.user_id,
             reason,
         )
@@ -400,7 +695,10 @@ class Assistant(Agent):
 
             return {
                 "success": False,
-                "message": "This escalation reason is not supported.",
+                "message": (
+                    "This escalation reason "
+                    "is not supported."
+                ),
             }
 
         allowed_urgency = {
@@ -411,6 +709,7 @@ class Assistant(Agent):
         }
 
         if urgency not in allowed_urgency:
+
             urgency = "medium"
 
         sensitive_terms = [
@@ -434,28 +733,80 @@ class Assistant(Agent):
                 return {
                     "success": False,
                     "message": (
-                        "The escalation summary contains private "
-                        "information. Please remove sensitive "
-                        "information before creating the request."
+                        "The escalation summary contains "
+                        "private information. Please remove "
+                        "sensitive information before "
+                        "creating the request."
                     ),
                 }
 
-        result = await asyncio.to_thread(
-            save_escalation,
+        try:
+
+            result = await asyncio.to_thread(
+                save_escalation,
+                self.user_id,
+                reason,
+                summary,
+                urgency,
+                language,
+                preferred_followup,
+            )
+
+            if result.get("success"):
+
+                self.call_state[
+                    "successful"
+                ] = True
+
+            return result
+
+        except Exception:
+
+            logger.exception(
+                "Escalation creation failed."
+            )
+
+            return {
+                "success": False,
+                "message": (
+                    "Unable to create the human "
+                    "assistance request."
+                ),
+            }
+
+    # ============================================================
+    # HANDOFF
+    # ============================================================
+
+    @function_tool
+    async def handoff_to_clinic_specialist(
+        self,
+        context: RunContext,
+    ):
+
+        logger.info(
+            "Handing off user %s to Clinic "
+            "Appointment Specialist",
             self.user_id,
-            reason,
-            summary,
-            urgency,
-            language,
-            preferred_followup,
         )
 
-        if result.get("success"):
+        chat_ctx = self.chat_ctx.copy(
+            exclude_instructions=True
+        )
 
-            # A successful escalation is a successful call outcome.
-            self.call_state["successful"] = True
+        specialist = ClinicAppointmentSpecialist(
+            user_id=self.user_id,
+            call_state=self.call_state,
+            chat_ctx=chat_ctx,
+        )
 
-        return result
+        return (
+            specialist,
+            (
+                "Transferring you to the Clinic "
+                "and Appointment Specialist."
+            ),
+        )
 
 
 # ================================================================
@@ -469,15 +820,27 @@ server = AgentServer()
 # PREWARM
 # ================================================================
 
-def prewarm(proc: JobProcess):
+def prewarm(
+    proc: JobProcess
+):
 
-    proc.userdata["vad"] = silero.VAD.load()
+    logger.info(
+        "Prewarming agent process..."
+    )
+
+    proc.userdata["vad"] = (
+        silero.VAD.load()
+    )
 
     init_database()
 
     init_escalation_database()
 
     init_analytics_database()
+
+    logger.info(
+        "Prewarm completed."
+    )
 
 
 server.setup_fnc = prewarm
@@ -487,8 +850,12 @@ server.setup_fnc = prewarm
 # LIVEKIT SESSION
 # ================================================================
 
-@server.rtc_session(agent_name="my-agent")
-async def my_agent(ctx: JobContext):
+@server.rtc_session(
+    agent_name=AGENT_NAME
+)
+async def my_agent(
+    ctx: JobContext
+):
 
     ctx.log_context_fields = {
         "room": ctx.room.name,
@@ -502,9 +869,9 @@ async def my_agent(ctx: JobContext):
         timespec="seconds"
     )
 
-    # ------------------------------------------------------------
-    # Per-call state
-    # ------------------------------------------------------------
+    # ============================================================
+    # CALL STATE
+    # ============================================================
 
     call_state = {
         "user_spoke": False,
@@ -513,8 +880,20 @@ async def my_agent(ctx: JobContext):
     }
 
     logger.info(
-        "Starting session for user: %s",
-        user_id
+        "=================================================="
+    )
+
+    logger.info(
+        "STARTING HEALTH ACCESS SESSION"
+    )
+
+    logger.info(
+        "Room: %s",
+        ctx.room.name,
+    )
+
+    logger.info(
+        "=================================================="
     )
 
     # ============================================================
@@ -523,57 +902,143 @@ async def my_agent(ctx: JobContext):
 
     session = AgentSession(
 
+        # ========================================================
+        # DEEPGRAM STT
+        # ========================================================
+
         stt=deepgram.STT(
             model="nova-3",
+            api_key=DEEPGRAM_API_KEY,
         ),
 
-        llm=google.LLM(
-            model="gemini-3.5-flash",
+        # ========================================================
+        # GROQ LLM
+        # ========================================================
+
+        llm=groq.LLM(
+            model="llama-3.3-70b-versatile",
+            api_key=GROQ_API_KEY,
+            temperature=0.3,
+            max_retries=2,
         ),
+
+        # ========================================================
+        # MURF TTS
+        # ========================================================
 
         tts=murf.TTS(
+            api_key=MURF_API_KEY,
             voice="Abhinav",
             locale="hi-IN",
             style="Conversational",
             tokenizer=tokenize.basic.SentenceTokenizer(
-                min_sentence_len=2
+                min_sentence_len=2,
             ),
             text_pacing=True,
         ),
 
-        turn_detection=MultilingualModel(),
+        # ========================================================
+        # LIVEKIT TURN DETECTOR
+        # ========================================================
+
+        turn_detection=inference.TurnDetector(
+            version="v1-mini"
+        ),
+
+        # ========================================================
+        # VAD
+        # ========================================================
 
         vad=ctx.proc.userdata["vad"],
+
+        # ========================================================
+        # PREEMPTIVE GENERATION
+        # ========================================================
 
         preemptive_generation=True,
     )
 
     # ============================================================
-    # CALL ANALYTICS EVENTS
+    # SESSION EVENTS
     # ============================================================
 
-    @session.on("user_input_transcribed")
-    def on_user_input_transcribed(event):
+    @session.on(
+        "user_input_transcribed"
+    )
+    def on_user_input_transcribed(
+        event
+    ):
 
-        # Any real user speech means the call has started.
-        call_state["user_spoke"] = True
+        call_state[
+            "user_spoke"
+        ] = True
 
-    @session.on("agent_state_changed")
-    def on_agent_state_changed(event):
+        logger.info(
+            "USER INPUT RECEIVED: %s",
+            getattr(
+                event,
+                "transcript",
+                "",
+            ),
+        )
 
-        # Only count agent speech after the user has actually spoken.
+    @session.on(
+        "agent_state_changed"
+    )
+    def on_agent_state_changed(
+        event
+    ):
+
+        new_state = getattr(
+            event,
+            "new_state",
+            None,
+        )
+
+        logger.info(
+            "AGENT STATE: %s",
+            new_state,
+        )
+
         if (
             call_state["user_spoke"]
-            and getattr(event, "new_state", None) == "speaking"
+            and new_state == "speaking"
         ):
-            call_state["agent_spoke"] = True
 
-            # Receiving a response means the caller received
-            # some form of assistance.
-            call_state["successful"] = True
+            call_state[
+                "agent_spoke"
+            ] = True
+
+            call_state[
+                "successful"
+            ] = True
+
+    @session.on(
+        "error"
+    )
+    def on_session_error(
+        event
+    ):
+
+        logger.error(
+            "AGENT SESSION ERROR: %s",
+            event,
+        )
+
+    @session.on(
+        "close"
+    )
+    def on_session_close(
+        event
+    ):
+
+        logger.info(
+            "AGENT SESSION CLOSED: %s",
+            event,
+        )
 
     # ============================================================
-    # SAVE ANALYTICS WHEN CALL ENDS
+    # SAVE ANALYTICS
     # ============================================================
 
     async def save_call_result():
@@ -582,13 +1047,11 @@ async def my_agent(ctx: JobContext):
             timespec="seconds"
         )
 
-        if call_state["successful"]:
-
-            outcome = "successful"
-
-        else:
-
-            outcome = "failed"
+        outcome = (
+            "successful"
+            if call_state["successful"]
+            else "failed"
+        )
 
         try:
 
@@ -620,6 +1083,10 @@ async def my_agent(ctx: JobContext):
     # START SESSION
     # ============================================================
 
+    logger.info(
+        "Starting AgentSession..."
+    )
+
     await session.start(
 
         agent=Assistant(
@@ -631,20 +1098,61 @@ async def my_agent(ctx: JobContext):
 
         room_options=room_io.RoomOptions(
 
-            audio_input=room_io.AudioInputOptions(
+            audio_input=(
+                room_io.AudioInputOptions(
 
-                noise_cancellation=lambda params: (
-                    noise_cancellation.BVCTelephony()
-                    if params.participant.kind
-                    == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-                    else noise_cancellation.BVC()
-                ),
+                    noise_cancellation=(
+                        lambda params: (
+                            noise_cancellation.BVCTelephony()
+                            if (
+                                params.participant.kind
+                                == rtc.ParticipantKind
+                                .PARTICIPANT_KIND_SIP
+                            )
+                            else noise_cancellation.BVC()
+                        )
+                    ),
 
+                )
             ),
+
         ),
     )
 
-    await ctx.connect()
+    logger.info(
+        "AgentSession started successfully."
+    )
+
+    # ============================================================
+    # INITIAL GREETING
+    # ============================================================
+
+    logger.info(
+        "Generating initial greeting..."
+    )
+
+    try:
+
+        await session.generate_reply(
+            instructions=(
+                "Greet the user briefly. Say that you "
+                "are the Health Access Assistant and "
+                "ask how you can help. Use natural "
+                "Indian English or Hindi/Hinglish. "
+                "Keep it short because this is a "
+                "voice conversation."
+            )
+        )
+
+        logger.info(
+            "Initial greeting generated."
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Initial greeting failed."
+        )
 
 
 # ================================================================
@@ -652,4 +1160,13 @@ async def my_agent(ctx: JobContext):
 # ================================================================
 
 if __name__ == "__main__":
-    cli.run_app(server)
+
+    logger.info(
+        "Starting Health Access Agent..."
+    )
+
+    validate_environment()
+
+    cli.run_app(
+        server
+    )
